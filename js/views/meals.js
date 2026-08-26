@@ -1,7 +1,7 @@
 /* Meals — personal weekly meal plan per member, day strip, macro totals. */
 import {
   getState, mutate, me, memberById, todayStr, addDays, dowOf, fromDateStr,
-  uid, logKey, extrasFor, MEAL_SLOTS,
+  uid, logKey, extrasFor, mealsFor, MEAL_SLOTS,
 } from '../store.js';
 import { $, $$, esc, avatar, openSheet, closeSheet, confirmSheet, toast, progressBar } from '../ui.js';
 import { openScanSheet } from './scan.js';
@@ -11,6 +11,7 @@ let dayCursor = todayStr();
 
 export const mealsView = {
   id: 'meals',
+  onEnter() { member = me().id; dayCursor = todayStr(); },
   title: () => 'Meal Plan',
   subtitle: () => `${(member ? memberById(member) : me()).name}'s week`,
   fab: () => openMealSheet(null),
@@ -36,6 +37,7 @@ function renderInto(root) {
   const dow = dowOf(dayCursor);
   const plan = (s.mealPlans[member]?.[dow] || []);
   const extras = extrasFor(member, dayCursor);
+  const doneLog = s.mealLog[logKey(dayCursor, member)] || {};
   const bySlot = MEAL_SLOTS.map((slot) => ({
     slot,
     items: plan.filter((x) => x.slot === slot),
@@ -74,15 +76,23 @@ function renderInto(root) {
       <div class="grid-2">
         <div class="col gap-4">
           <div class="hero-num" style="font-size:28px">${cal.toLocaleString()}</div>
-          <span class="stat-l" style="margin-top:0">of ${m.goals.calories.toLocaleString()} cal</span>
+          <span class="stat-l" style="margin-top:0">planned · goal ${m.goals.calories.toLocaleString()} cal</span>
           <div style="margin-top:7px">${progressBar(cal / m.goals.calories, 'var(--grad-amber)')}</div>
         </div>
         <div class="col gap-4">
           <div class="hero-num" style="font-size:28px">${pro}g</div>
-          <span class="stat-l" style="margin-top:0">of ${m.goals.protein}g protein</span>
+          <span class="stat-l" style="margin-top:0">planned · goal ${m.goals.protein}g</span>
           <div style="margin-top:7px">${progressBar(pro / m.goals.protein, 'var(--grad-green)')}</div>
         </div>
       </div>
+      ${(() => {
+        const eaten = mealsFor(member, dayCursor).filter((x) => x.done);
+        const eCal = eaten.reduce((n, x) => n + (x.cal || 0), 0);
+        const ePro = eaten.reduce((n, x) => n + (x.protein || 0), 0);
+        return `<p class="tiny dim" style="margin-top:9px">
+          ✓ Eaten${dayCursor === t ? ' so far' : ''}: <b class="num">${eCal.toLocaleString()} cal · ${ePro}g</b> —
+          the dashboard rings track what's checked ✓; the numbers above are the day's plan.</p>`;
+      })()}
     </div>
 
     <!-- slots -->
@@ -100,21 +110,32 @@ function renderInto(root) {
       <div class="list">
         ${items.length || xs.length ? `
           ${items.map((meal) => `
-          <button class="list-row" data-meal="${meal.id}">
-            <span class="grow">
-              <div class="list-title">${esc(meal.name)}</div>
-              <div class="list-sub">${meal.cal} cal · ${meal.protein}g protein</div>
-            </span>
-            <span class="chev">›</span>
-          </button>`).join('')}
+          <div class="list-row" style="padding:0">
+            <button class="row gap-12" data-meal-check="${meal.id}" aria-label="Mark eaten"
+              style="padding:12px 0 12px 14px;flex:none">
+              <span class="check ${doneLog[meal.id] ? 'is-on' : ''}">✓</span>
+            </button>
+            <button class="row grow gap-12" data-meal="${meal.id}"
+              style="padding:12px 14px 12px 0;text-align:left;min-width:0">
+              <span class="grow" style="min-width:0">
+                <div class="list-title truncate" style="${doneLog[meal.id] ? 'opacity:.55' : ''}">${esc(meal.name)}</div>
+                <div class="list-sub">${meal.cal} cal · ${meal.protein}g protein</div>
+              </span>
+              <span class="chev">›</span>
+            </button>
+          </div>`).join('')}
           ${xs.map((x) => `
-          <div class="list-row no-press">
-            ${x.thumb ? `<img src="${x.thumb}" alt="" style="width:38px;height:38px;object-fit:cover;border-radius:9px;flex:none" />` : ''}
-            <span class="grow" style="min-width:0">
-              <div class="list-title truncate">${esc(x.name)}</div>
-              <div class="list-sub">${x.cal} cal · ${x.protein}g protein · 📷 scanned</div>
-            </span>
-            <button data-extra-del="${x.id}" aria-label="Remove" class="dim" style="padding:6px 2px;font-size:15px;flex:none">✕</button>
+          <div class="list-row" style="padding:0">
+            <button class="row grow gap-12" data-extra-check="${x.id}"
+              style="padding:12px 0 12px 14px;text-align:left;min-width:0">
+              <span class="check ${x.done ? 'is-on' : ''}">✓</span>
+              ${x.thumb ? `<img src="${x.thumb}" alt="" style="width:38px;height:38px;object-fit:cover;border-radius:9px;flex:none" />` : ''}
+              <span class="grow" style="min-width:0">
+                <div class="list-title truncate" style="${x.done ? 'opacity:.55' : ''}">${esc(x.name)}</div>
+                <div class="list-sub">${x.cal} cal · ${x.protein}g protein · 📷 scanned</div>
+              </span>
+            </button>
+            <button data-extra-del="${x.id}" aria-label="Remove" class="dim" style="padding:12px 14px;font-size:15px;flex:none">✕</button>
           </div>`).join('')}`
         : `<div class="empty" style="padding:16px">Nothing planned</div>`}
       </div>`; }).join('')}
@@ -140,6 +161,20 @@ function renderInto(root) {
   }));
   $('#copyDay', root).addEventListener('click', openCopySheet);
   $('#scanMeal', root).addEventListener('click', () => openScanSheet(dayCursor, member));
+  $$('[data-meal-check]', root).forEach((b) => b.addEventListener('click', () => {
+    const key = logKey(dayCursor, member);
+    mutate((st) => {
+      st.mealLog[key] = st.mealLog[key] || {};
+      st.mealLog[key][b.dataset.mealCheck] = !st.mealLog[key][b.dataset.mealCheck];
+    });
+  }));
+  $$('[data-extra-check]', root).forEach((b) => b.addEventListener('click', () => {
+    const key = logKey(dayCursor, member);
+    mutate((st) => {
+      const x = (st.mealExtras[key] || []).find((e) => e.id === b.dataset.extraCheck);
+      if (x) x.done = !x.done;
+    });
+  }));
   $$('[data-extra-del]', root).forEach((b) => b.addEventListener('click', () => {
     const key = logKey(dayCursor, member);
     mutate((st) => {

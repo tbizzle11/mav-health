@@ -606,6 +606,28 @@ input, textarea, select { -webkit-appearance: none; appearance: none; }
 .banner-amber { background: var(--amber-soft); }
 .banner-red   { background: var(--red-soft); }
 
+/* "nothing is saving on this phone" — deliberately impossible to miss.
+   Sits just above the tab bar so it never fights the header layout. */
+.savebar {
+  position: fixed; z-index: 150;
+  left: calc(12px + var(--sal)); right: calc(12px + var(--sar));
+  bottom: calc(var(--tabbar-h) + var(--sab) + 12px);
+  display: flex; flex-direction: column; gap: 2px; align-items: center;
+  padding: 11px 14px; border: 0; border-radius: var(--r-md);
+  width: auto; text-align: center;
+  /* fixed red, not var(--red): the dark-theme token is a pale pink that leaves
+     white text at ~2.5:1. This one holds ~6:1 in both themes. */
+  background: #c0271c; color: #fff;
+  font-family: inherit; font-size: 12px; line-height: 1.35;
+  box-shadow: var(--shadow-md);
+  animation: savebarIn .25s cubic-bezier(.32,.72,0,1);
+}
+@keyframes savebarIn { from { opacity: 0; transform: translateY(14px); }
+                       to   { opacity: 1; transform: none; } }
+.savebar b { font-size: 13.5px; font-weight: 700; }
+.savebar span { opacity: .93; }
+.has-savebar .view { padding-bottom: calc(var(--tabbar-h) + var(--sab) + 92px); }
+
 .fade-in { animation: fadeUp .28s cubic-bezier(.4,0,.2,1); }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
 

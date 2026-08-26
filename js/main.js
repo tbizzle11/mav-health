@@ -1,7 +1,8 @@
 /* ============================================================
    main.js — boot, router, chrome (topbar / tabbar / fab).
    ============================================================ */
-import { initStore, subscribe, getState, mutate, me, initialsOf } from './store.js';
+import { initStore, subscribe, getState, mutate, me, initialsOf, flushStore } from './store.js';
+import { initStorage, storageHealth } from './storage.js';
 import { $, $$, esc, mountTabIcons, initSheet, openSheet, closeSheet, toast, uiIcon } from './ui.js';
 import { todayView } from './views/today.js';
 import { calendarView } from './views/calendar.js';
@@ -57,7 +58,13 @@ function renderChrome() {
 }
 
 function render() {
+  const prev = current;
   current = routeFromHash();
+  // entering a view fresh resets its stale tab memory (day cursor, viewed
+  // member) — an installed PWA lives for days, and a Meals tab quietly stuck
+  // on yesterday or on a teammate made edits land where the dashboard
+  // doesn't look ("dashboard isn't syncing with the meals tab")
+  if (prev !== current) VIEWS[current].onEnter?.();
   renderChrome();
   const root = $('#view');
   root.scrollTop = 0;
@@ -95,38 +102,82 @@ function firstRun() {
   });
 }
 
-/* boot */
-window.__mavBuild = 15; // bump to verify which build the page runs
-applyTheme();
-initStore();
-mountTabIcons();
-initSheet();
-
-window.addEventListener('hashchange', render);
-window.addEventListener('mav:titlechange', renderChrome);
-// any data mutation re-renders the active view so the UI never goes stale
-subscribe(() => {
-  renderChrome();
-  const root = $('#view');
-  VIEWS[current].render(root);
-  // skip the entry animation on data refreshes (it's for navigation only)
-  $$('.fade-in', root).forEach((el) => el.classList.remove('fade-in'));
+/* If saving ever stops working, say so loudly and permanently. The old build
+   swallowed a full-storage error and carried on showing "Logged ✓" while
+   nothing reached the disk — closing the app then threw the day away. */
+function showSaveWarning() {
+  if ($('#saveWarn')) return;
+  const bar = document.createElement('button');
+  bar.id = 'saveWarn';
+  bar.className = 'savebar';
+  bar.type = 'button';
+  bar.innerHTML = '<b>⚠️ Not saving on this phone</b>'
+    + '<span>Changes will be lost when the app closes — tap for details</span>';
+  bar.addEventListener('click', openSettingsSheet);
+  document.body.appendChild(bar);
+  document.documentElement.classList.add('has-savebar');
+}
+function hideSaveWarning() {
+  $('#saveWarn')?.remove();
+  document.documentElement.classList.remove('has-savebar');
+}
+window.addEventListener('mav:savefail', showSaveWarning);
+window.addEventListener('mav:storage', (e) => {
+  if (e.detail && e.detail.durable === false) showSaveWarning(); else hideSaveWarning();
 });
 
-$('#profileBtn').addEventListener('click', () => { location.hash = '#/team'; });
-$('#settingsBtn').addEventListener('click', openSettingsSheet);
+/* boot */
+window.__mavBuild = 21; // bump to verify which build the page runs
+applyTheme();
 
-// re-render Today at midnight-ish / on focus so dates stay fresh
-window.addEventListener('focus', () => render());
+async function boot() {
+  await initStore();          // async now: IndexedDB is the durable store
+  mountTabIcons();
+  initSheet();
 
-render();
-firstRun();
-initSync();
+  window.addEventListener('hashchange', render);
+  window.addEventListener('mav:titlechange', renderChrome);
+  // any data mutation re-renders the active view so the UI never goes stale
+  subscribe(() => {
+    renderChrome();
+    const root = $('#view');
+    VIEWS[current].render(root);
+    // skip the entry animation on data refreshes (it's for navigation only)
+    $$('.fade-in', root).forEach((el) => el.classList.remove('fade-in'));
+  });
 
-/* If iOS reloaded the app mid-scan (camera round-trip under memory pressure),
-   pick the scan back up instead of silently losing the photo. */
-const pendingScan = getState().me ? peekPendingScan() : null;
-if (pendingScan) openScanSheet(pendingScan.targetDate, pendingScan.member, pendingScan);
+  $('#profileBtn').addEventListener('click', () => { location.hash = '#/team'; });
+  $('#settingsBtn').addEventListener('click', openSettingsSheet);
+
+  // re-render Today at midnight-ish / on focus so dates stay fresh
+  window.addEventListener('focus', () => render());
+
+  // never let a queued write die with the app
+  window.addEventListener('pagehide', () => flushStore());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushStore();
+  });
+
+  render();
+  firstRun();
+  initSync();
+
+  // ask the browser not to evict us, then report where this phone stands
+  initStorage().then(() => { if (!storageHealth().durable) showSaveWarning(); });
+
+  /* If iOS reloaded the app mid-scan (camera round-trip under memory pressure),
+     pick the scan back up instead of silently losing the photo. */
+  const pendingScan = getState().me ? peekPendingScan() : null;
+  if (pendingScan) openScanSheet(pendingScan.targetDate, pendingScan.member, pendingScan);
+}
+
+boot().catch((err) => {
+  console.error('MAV boot failed', err);
+  const root = $('#view');
+  if (root) root.innerHTML = '<div class="banner banner-red" style="margin:16px">'
+    + 'Couldn\'t start the app: ' + String((err && err.message) || err)
+    + '. Close it fully and reopen.</div>';
+});
 
 /* PWA service worker */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {

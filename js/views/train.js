@@ -9,6 +9,7 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export const trainView = {
   id: 'train',
+  onEnter() { member = me().id; },
   title: () => 'Training',
   subtitle: () => `${(member ? memberById(member) : me()).name}'s plans`,
   fab: () => openPlanSheet(null),

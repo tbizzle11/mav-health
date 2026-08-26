@@ -1,10 +1,11 @@
 /* ============================================================
    store.js — data layer.
-   Offline-first: state lives in localStorage; every mutation
-   goes through mutate() so a sync backend can hook in later.
+   Offline-first: state is persisted by storage.js (IndexedDB,
+   with a localStorage cache) and every mutation goes through
+   mutate(), which verifies the write actually landed.
    ============================================================ */
 
-const KEY = 'mavhealth.v1';
+import { loadState, saveState, flushState, storageHealth } from './storage.js';
 
 export const EVENT_TYPES = {
   meeting:  { label: 'Meeting',  color: 'var(--blue)',   soft: 'var(--blue-soft)'   },
@@ -59,18 +60,18 @@ export function getState() { return state; }
 export function mutate(fn) {
   fn(state);
   state.updatedAt = Date.now();
-  try {
-    localStorage.setItem(KEY, JSON.stringify(state));
-  } catch (err) {
-    // quota exceeded (photo thumbs) — drop thumbnails and retry once
-    console.warn('storage full, dropping photo thumbnails', err);
-    Object.values(state.mealExtras || {}).forEach((list) =>
-      list.forEach((x) => { delete x.thumb; }));
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* keep in-memory */ }
+  const saved = saveState(state);
+  if (!saved) {
+    // Nothing accepted the write. Say so — the old code swallowed this and let
+    // the UI report success while the edit only ever existed in memory.
+    console.error('MAV: save failed', storageHealth());
+    window.dispatchEvent(new CustomEvent('mav:savefail', { detail: storageHealth() }));
   }
   emit();
-  // sync hook: window.mavSync?.push(state) — wired when backend lands
 }
+
+/** Push any queued write to disk now (app backgrounding / closing). */
+export const flushStore = () => flushState();
 
 /* ---------- seed ---------- */
 function seed() {
@@ -110,11 +111,9 @@ function seed() {
   };
 }
 
-export function initStore() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    state = raw ? JSON.parse(raw) : seed();
-  } catch { state = seed(); }
+export async function initStore() {
+  const { state: loaded } = await loadState();
+  state = loaded || seed();
   if (!state.members?.length) state = seed();
   state.mealExtras = state.mealExtras || {};   // migration for pre-scan data
   state.recentMeals = state.recentMeals || []; // migration: one-tap re-log
@@ -126,7 +125,7 @@ export function initStore() {
     m.checklist = m.checklist || { must: [], should: [], want: [] };
     // m.profile stays undefined until the wizard runs
   });
-  localStorage.setItem(KEY, JSON.stringify(state));
+  saveState(state);   // never throws — a full store can no longer white-screen boot
   return state;
 }
 

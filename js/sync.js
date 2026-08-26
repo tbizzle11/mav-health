@@ -14,6 +14,7 @@
    ============================================================ */
 
 import { getState, mutate, subscribe } from './store.js';
+import { storageHealth, flushState, markThumbsRecovered, restoreThumbQuarantine } from './storage.js';
 
 const SYNC_URL = 'https://chnxrkufwzamhpelovge.supabase.co/rest/v1/sync_buckets';
 const SYNC_KEY = 'sb_publishable_FxhZ13aT4rQg3KP8hxMH7Q_jx4ziiUV'; // public by design; RLS + team key guard the data
@@ -75,20 +76,84 @@ async function api(path, opts = {}) {
 }
 
 /* ---------- engine ---------- */
-/* base = per-bucket JSON string as of the last successful sync. PERSISTED so
-   an app relaunch doesn't mistake untouched local data for fresh edits and
-   clobber newer remote data (the stale-overwrite bug). */
+/* base = a small FINGERPRINT per bucket as of the last successful sync,
+   PERSISTED so an app relaunch doesn't mistake untouched local data for fresh
+   edits and clobber newer remote data (the stale-overwrite bug).
+
+   This used to hold a full JSON copy of every bucket, which meant localStorage
+   carried the entire app state TWICE. That doubled footprint is half of what
+   pushed Safari past its ~5 MB cap and made saves start failing silently.
+   Hashes are a few hundred bytes and answer the only two questions the merge
+   asks: "did this bucket change?" and, for union buckets, "which keys?" */
 const BASE_STORE = 'mavhealth.syncbase';
-let base = (() => { try { return JSON.parse(localStorage.getItem(BASE_STORE) || '{}'); } catch { return {}; } })();
-const saveBase = () => { try { localStorage.setItem(BASE_STORE, JSON.stringify(base)); } catch {} };
+const BASE_V = 2;
+
+/* FNV-1a run twice with different mixes — collision odds are nil at this scale */
+function hash(str) {
+  let a = 0x811c9dc5, b = 0x9e3779b9;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x85ebca6b);
+  }
+  return (a >>> 0).toString(36) + '-' + (b >>> 0).toString(36);
+}
+const hashOf = (v) => hash(JSON.stringify(v ?? null));
+
+/** Whole-bucket hash, plus per-key hashes for union buckets so the merge can
+    still tell which individual entries this phone touched. */
+function fingerprint(bucket, val) {
+  const fp = { h: hashOf(val) };
+  if (BUCKETS[bucket].mode === 'union') {
+    fp.k = {};
+    for (const k of Object.keys(val || {})) fp.k[k] = hashOf(val[k]);
+  }
+  return fp;
+}
+
+function loadBase() {
+  let raw;
+  try { raw = JSON.parse(localStorage.getItem(BASE_STORE) || 'null'); } catch { return {}; }
+  if (!raw || typeof raw !== 'object') return {};
+  if (raw.v === BASE_V) return raw.b || {};
+  // migrate the old full-copy format in place, so upgrading doesn't read as
+  // "no baseline" and adopt the server's copy over this phone's edits
+  const out = {};
+  for (const [b, str] of Object.entries(raw)) {
+    if (!BUCKETS[b] || typeof str !== 'string') continue;
+    try { out[b] = fingerprint(b, JSON.parse(str)); } catch {}
+  }
+  return out;
+}
+
+let base = loadBase();
+const saveBase = () => {
+  try { localStorage.setItem(BASE_STORE, JSON.stringify({ v: BASE_V, b: base })); } catch {}
+};
 let applyingRemote = false;
 let pushTimer = null;
 let pollTimer = null;
 
-const snap = (b) => JSON.stringify(getVal(getState(), b) ?? null);
+const valOf = (b) => getVal(getState(), b) ?? null;
+const fpNow = (b) => fingerprint(b, valOf(b));
 
 function dirtyBuckets() {
-  return Object.keys(BUCKETS).filter((b) => snap(b) !== base[b]);
+  const h = storageHealth();
+  return Object.keys(BUCKETS).filter((b) => {
+    // photo-bearing buckets are withheld while this phone booted from a
+    // thumb-stripped cache and hasn't recovered the durable copy — pushing
+    // them would spread thumbless entries over teammates' intact ones
+    if (h.strippedUnrecovered && (b === 'mealExtras' || b === 'recentMeals')) return false;
+    return !base[b] || fpNow(b).h !== base[b].h;
+  });
+}
+
+/** Is the CURRENT state provably held by a store? (Not a stale health sample:
+    when localStorage isn't holding it, this awaits the actual IndexedDB write.) */
+async function stateHeld() {
+  const h = storageHealth();
+  if (h.local === 'ok' || h.local === 'trimmed') return true;
+  return (await flushState()) === true;
 }
 
 async function push({ keepalive = false } = {}) {
@@ -96,9 +161,12 @@ async function push({ keepalive = false } = {}) {
   const dirty = dirtyBuckets();
   if (!dirty.length) return;
   const team = getTeamKey();
+  // Fingerprint BEFORE the await: an edit made while the request is in flight
+  // must stay dirty, or it gets marked synced without ever having been sent.
+  const sent = dirty.map((b) => ({ b, fp: fpNow(b) }));
   const rows = dirty.map((b) => ({
     team_id: team, bucket: b,
-    data: JSON.parse(snap(b)),
+    data: valOf(b),
     updated_at: new Date().toISOString(),
     device: `${deviceId()}@b${window.__mavBuild || 0}`,
   }));
@@ -114,8 +182,15 @@ async function push({ keepalive = false } = {}) {
     if (!keepalive) throw err;
     await api('', opts);
   }
-  dirty.forEach((b) => { base[b] = snap(b); });
-  saveBase();
+  // Only advance the baseline when the state itself is CONFIRMED held: base is
+  // a tiny write that fits quota when the multi-MB state does not, and a
+  // baseline ahead of the state resurrects the stale-overwrite bug on boot.
+  // stateHeld() awaits the actual IndexedDB write in the quota-tight regime —
+  // a point-in-time health sample was provably stale here.
+  if (await stateHeld()) {
+    sent.forEach(({ b, fp }) => { base[b] = fp; });
+    saveBase();
+  }
 }
 
 async function pull({ replace = false } = {}) {
@@ -123,44 +198,94 @@ async function pull({ replace = false } = {}) {
   const rows = await api(`?select=bucket,data,updated_at&team_id=eq.${encodeURIComponent(getTeamKey())}`, { method: 'GET' });
   let changed = 0;
 
+  const stripped = storageHealth().strippedUnrecovered;
+  const sawPhotoBucket = { mealExtras: false, recentMeals: false };
+
   applyingRemote = true;
   try {
     mutate((s) => {
       for (const row of rows) {
         const b = row.bucket;
         if (!BUCKETS[b]) continue;
-        const remoteStr = JSON.stringify(row.data);
-        const localStr = snap(b);
-        if (remoteStr === localStr) { base[b] = remoteStr; continue; }
+        const remoteFp = fingerprint(b, row.data ?? null);
+        const localFp = fpNow(b);
 
-        if (replace || localStr === base[b] || (base[b] === undefined && BUCKETS[b].mode === 'lww')) {
+        // stripped-cache quarantine: this phone's photo entries are thumbless
+        // copies — the server's versions win per-entry, and only genuinely NEW
+        // local entries (absent remotely) survive the merge
+        if (stripped && (b === 'mealExtras' || b === 'recentMeals')) {
+          sawPhotoBucket[b] = true;
+          setVal(s, b, preferRemotePhotos(b, row.data, getVal(s, b)));
+          base[b] = remoteFp; // additions stay dirty and push once the quarantine lifts
+          changed++;
+          continue;
+        }
+        if (remoteFp.h === localFp.h) { base[b] = remoteFp; continue; }
+
+        const noLocalEdits = !!base[b] && localFp.h === base[b].h;
+        // no baseline = we cannot prove local edits, so the server is the
+        // source of truth for BOTH modes. (Union used to treat every local key
+        // as "locally changed" here, which pushed stale copies of teammates'
+        // entries over their newer ones — the clobber bug reborn.)
+        if (replace || noLocalEdits || !base[b]) {
           // adopt remote wholly when: joining, no local edits since last sync,
           // or we have no baseline to prove local edits (fresh boot after
           // upgrade) — the server is the source of truth in that case
           setVal(s, b, row.data);
-          base[b] = remoteStr;
+          base[b] = remoteFp;
           changed++;
           continue;
         }
         // both sides changed since last sync
         if (BUCKETS[b].mode === 'union') {
-          const baseObj = base[b] ? JSON.parse(base[b]) : {};
+          const baseKeys = (base[b] && base[b].k) || {};
           const localObj = getVal(s, b) || {};
           const merged = { ...(row.data || {}) };
           for (const k of Object.keys(localObj)) {
-            const changedLocally = JSON.stringify(localObj[k]) !== JSON.stringify(baseObj[k]);
+            const changedLocally = hashOf(localObj[k]) !== baseKeys[k];
             if (changedLocally || !(k in merged)) merged[k] = localObj[k];
           }
           setVal(s, b, merged);
-          base[b] = remoteStr; // remote as baseline; our overlay stays dirty and pushes next
+          base[b] = remoteFp; // remote as baseline; our overlay stays dirty and pushes next
           changed++;
         }
         // lww conflict: keep local (it's dirty and will push over remote momentarily)
       }
     });
   } finally { applyingRemote = false; }
-  saveBase();
+  // the quarantine lifts when every photo bucket was either merged from the
+  // server OR simply has no server row (nothing to recover from) — without
+  // the absent-row case, a team created after a stripped boot would withhold
+  // new scans forever (its initial push omitted the photo buckets).
+  // salvageTried is REQUIRED: lifting before the definitive local read would
+  // un-gate the flush retry and let it overwrite still-recoverable thumbs.
+  const rowSet = new Set(rows.map((r) => r.bucket));
+  if (stripped && storageHealth().salvageTried &&
+      ['mealExtras', 'recentMeals'].every((b) => sawPhotoBucket[b] || !rowSet.has(b))) {
+    markThumbsRecovered();
+  }
+  if (await stateHeld()) saveBase(); // never record "synced" for state we couldn't keep
   return { changed, rows: rows.length };
+}
+
+/** Remote photo entries win by id; local entries that don't exist remotely
+    (new scans made during the quarantine) are kept. */
+function preferRemotePhotos(bucket, remote, local) {
+  if (bucket === 'recentMeals') {
+    const merged = Array.isArray(remote) ? [...remote] : [];
+    const have = new Set(merged.map((r) => r && r.id));
+    (Array.isArray(local) ? local : []).forEach((r) => { if (r && !have.has(r.id)) merged.push(r); });
+    return merged;
+  }
+  const merged = {};
+  Object.entries(remote || {}).forEach(([k, v]) => { merged[k] = Array.isArray(v) ? [...v] : v; });
+  Object.entries(local || {}).forEach(([k, list]) => {
+    if (!Array.isArray(list)) return;
+    const cur = Array.isArray(merged[k]) ? merged[k] : (merged[k] = []);
+    const have = new Set(cur.map((x) => x && x.id));
+    list.forEach((x) => { if (x && !have.has(x.id)) cur.push(x); });
+  });
+  return merged;
 }
 
 async function cycle(opts = {}) {
@@ -168,7 +293,7 @@ async function cycle(opts = {}) {
   status.busy = true; announce();
   try {
     await pull(opts);
-    await push();
+    await push({ keepalive: !!opts.keepalive });
     status.lastSync = Date.now();
     status.error = '';
   } catch (err) {
@@ -187,13 +312,21 @@ function schedulePush() {
 /* ---------- public API ---------- */
 export function initSync() {
   subscribe(() => schedulePush());
+  // when storage recovers, persist the baseline that was withheld while the
+  // state itself couldn't be kept — closes the state-ahead-of-base window
+  window.addEventListener('mav:storage', (e) => {
+    if (e.detail && e.detail.durable && getTeamKey()) { try { saveBase(); } catch {} }
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') cycle();
-    else if (getTeamKey()) {
+    else if (getTeamKey() && !status.busy) {
       // app going to background — flush pending edits NOW so a close/kill
-      // can't strand them un-synced (they're always safe locally regardless)
+      // can't strand them un-synced (they're always safe locally regardless).
+      // Full cycle, not a bare push: pushing a union bucket without pulling
+      // first would wholesale-replace teammates' entries added since the last
+      // poll. The busy guard keeps this from racing a mid-flight cycle.
       clearTimeout(pushTimer);
-      push({ keepalive: true }).catch(() => { /* retries on next open */ });
+      cycle({ keepalive: true });
     }
   });
   if (getTeamKey()) {
@@ -227,6 +360,8 @@ export async function createTeamSync() {
 export async function joinTeamSync(key) {
   const prev = getTeamKey();
   const localBefore = JSON.parse(JSON.stringify(getState()));
+  const baseBefore = { ...base };
+  const strippedBefore = storageHealth().strippedUnrecovered;
   setTeamKey(key.trim());
   base = {};
   try {
@@ -286,7 +421,22 @@ export async function joinTeamSync(key) {
     announce();
     return true;
   } catch (err) {
+    // full rollback: by the time a late failure lands, pull(replace) may have
+    // already overwritten and PERSISTED the other team's data — restoring only
+    // the team key would leave the phone half-joined to a team it can't reach
     setTeamKey(prev);
+    base = baseBefore;
+    saveBase();
+    // the aborted join's pull may have lifted the thumb quarantine off the
+    // TARGET team's rows — the original team's recovery never happened
+    if (strippedBefore && !storageHealth().strippedUnrecovered) restoreThumbQuarantine();
+    applyingRemote = true;
+    try {
+      mutate((s) => {
+        Object.keys(s).forEach((k) => { delete s[k]; });
+        Object.assign(s, JSON.parse(JSON.stringify(localBefore)));
+      });
+    } finally { applyingRemote = false; }
     throw err;
   }
 }

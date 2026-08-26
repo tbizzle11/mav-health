@@ -15,6 +15,7 @@ let memberFilter = 'all';
 
 export const calendarView = {
   id: 'calendar',
+  onEnter() { cursor = todayStr(); monthAnchor = todayStr(); },
   title: () => 'Calendar',
   subtitle: () => 'Shared team calendar',
   fab: () => openEventSheet(null, cursor),

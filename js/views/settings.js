@@ -5,6 +5,7 @@ import { getState, mutate, memberById, initialsOf } from '../store.js';
 import { $, $$, esc, openSheet, closeSheet, confirmSheet, toast } from '../ui.js';
 import { getApiKey, setApiKey } from '../ai.js';
 import { getTeamKey, syncStatus, createTeamSync, joinTeamSync, leaveTeamSync, syncNow } from '../sync.js';
+import { storageHealth, refreshEstimate, verifySave } from '../storage.js';
 
 const THEME_KEY = 'mavhealth.theme';
 
@@ -27,6 +28,72 @@ export function applyTheme(t = getTheme()) {
 export function setTheme(t) {
   try { t === 'auto' ? localStorage.removeItem(THEME_KEY) : localStorage.setItem(THEME_KEY, t); } catch {}
   applyTheme(t);
+}
+
+/* ---------- storage health ----------
+   The original build kept everything in one localStorage blob with the photo
+   thumbnails inside it, so a phone could quietly cross Safari's ~5 MB cap and
+   stop saving with no warning at all. These rows exist so that is never again
+   invisible from the phone it is happening on. */
+const fmtBytes = (n) => {
+  if (!n) return '0 KB';
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${(n / 1073741824).toFixed(1)} GB`;
+};
+const agoText = (t) => {
+  if (!t) return 'not yet';
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  return `${Math.round(s / 3600)} h ago`;
+};
+
+function storageRowsHtml() {
+  const h = storageHealth();
+  const row = (label, value, tone = '') =>
+    `<div class="row-between" style="padding:3px 0">
+       <span class="small muted">${label}</span>
+       <span class="small strong num"${tone ? ` style="color:var(--${tone})"` : ''}>${esc(value)}</span>
+     </div>`;
+
+  const saving = h.durable !== false;
+  const parts = [
+    saving
+      ? row('Saving', '✓ working', 'green')
+      : row('Saving', '⚠️ FAILING', 'red'),
+    row('Permanent store', h.idb === 'fail' ? 'unavailable' : 'IndexedDB ✓', h.idb === 'fail' ? 'red' : ''),
+    row('Quick cache', {
+      ok: 'localStorage ✓', trimmed: `full — photos in IndexedDB`,
+      full: 'full', fail: 'blocked',
+    }[h.local] || '—', (h.local === 'fail' || h.local === 'full') ? 'amber' : ''),
+    row('Last saved', agoText(h.lastSaveAt)),
+  ];
+  if (h.quota) parts.push(row('Used', `${fmtBytes(h.usage)} of ${fmtBytes(h.quota)}`));
+  parts.push(row('Eviction-protected', h.persisted === true ? 'yes' : h.persisted === false ? 'no' : 'unknown',
+    h.persisted === false ? 'amber' : ''));
+
+  let note = '';
+  if (!saving) {
+    note = `<div class="banner banner-red" style="margin-top:10px">
+      <b>Nothing is saving on this phone.</b><br>
+      Anything you add now disappears when the app closes. Most likely this phone is out of
+      space or is in a Private tab. Free up space, or export a backup before closing.
+      ${h.lastError ? `<br><span class="tiny dim">${esc(h.lastError)}</span>` : ''}
+    </div>`;
+  } else if (h.thumbsAtRisk) {
+    note = `<div class="banner banner-red" style="margin-top:10px">
+      <b>Photos are at risk on this phone.</b><br>
+      Storage is tight and the permanent store isn't answering, so new photo
+      thumbnails only exist in memory until it recovers. Everything else is saved.
+    </div>`;
+  } else if (h.local === 'trimmed' || h.local === 'full') {
+    note = `<div class="banner banner-amber" style="margin-top:10px">
+      The quick cache is full, so photo thumbnails load from the permanent store instead.
+      Everything is still saved — nothing is lost.
+    </div>`;
+  }
+  return parts.join('') + note;
 }
 
 export function openSettingsSheet() {
@@ -87,6 +154,12 @@ export function openSettingsSheet() {
             </div>
             <p class="tiny dim" style="margin-top:6px">From console.anthropic.com → API Keys. Stored only on this device — never in backups or shared data.</p>`}
         </div>
+      </div>
+
+      <div class="field">
+        <label class="label">Storage health</label>
+        <div id="setStorage">${storageRowsHtml()}</div>
+        <button class="btn btn-sm btn-block" id="setStorageTest" style="margin-top:8px">Test a save now</button>
       </div>
 
       <div class="field">
@@ -169,6 +242,23 @@ export function openSettingsSheet() {
         setApiKey('');
         toast('Key removed from this device');
         closeSheet(); openSettingsSheet();
+      });
+
+      /* storage health */
+      refreshEstimate().then(() => {
+        const box = $('#setStorage', root);
+        if (box) box.innerHTML = storageRowsHtml();
+      });
+      $('#setStorageTest', root)?.addEventListener('click', async () => {
+        const btn = $('#setStorageTest', root);
+        btn.disabled = true; btn.textContent = 'Testing…';
+        const r = await verifySave();
+        const box = $('#setStorage', root);
+        if (box) box.innerHTML = storageRowsHtml();
+        btn.disabled = false; btn.textContent = 'Test a save now';
+        toast(r.idbOk || r.lsOk
+          ? 'Saves are working on this phone ✓'
+          : 'This phone is NOT saving — export a backup now');
       });
 
       $('#setExport', root).addEventListener('click', () => {

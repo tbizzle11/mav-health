@@ -8,7 +8,9 @@ import { openEventSheet } from './calendar.js';
 import { openSession } from './train.js';
 import { openScanSheet } from './scan.js';
 import { openProfileWizard } from './profile.js';
+import { openSettingsSheet } from './settings.js';
 import { buildDayPlan } from '../planner.js';
+import { getTeamKey } from '../sync.js';
 
 let prevWater = 0; // for the cascade animation on newly-filled droplets
 
@@ -61,6 +63,27 @@ export const todayView = {
           </div>
         </div>
       </div>
+
+      ${!getTeamKey() ? `
+      <div class="banner banner-amber" style="margin-top:12px">
+        <div class="row-between">
+          <span><b>⚠️ Not backed up</b><br><span class="small muted">Data lives only on this phone until you join team sync.</span></span>
+          <button class="btn btn-sm btn-primary" id="syncNudge" style="flex:none">Set up</button>
+        </div>
+      </div>` : ''}
+
+      ${(() => {
+        const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone;
+        const dismissed = (() => { try { return localStorage.getItem('mavhealth.hideInstallTip'); } catch { return '1'; } })();
+        const mobile = /iphone|ipad|android/i.test(navigator.userAgent);
+        return !standalone && !dismissed && mobile ? `
+        <div class="banner" style="margin-top:12px">
+          <div class="row-between">
+            <span class="small">📲 <b>Install the app</b> — Share → <b>Add to Home Screen</b>. iOS protects installed apps' data much better than browser tabs.</span>
+            <button class="btn btn-sm" id="hideInstallTip" style="flex:none">Got it</button>
+          </div>
+        </div>` : '';
+      })()}
 
       ${!m.profile ? `
       <div class="banner" style="margin-top:12px">
@@ -227,6 +250,11 @@ export const todayView = {
     $('#scanFood', root)?.addEventListener('click', () => openScanSheet(t));
 
     $('#setupProfile', root)?.addEventListener('click', () => openProfileWizard(m.id));
+    $('#syncNudge', root)?.addEventListener('click', openSettingsSheet);
+    $('#hideInstallTip', root)?.addEventListener('click', (e) => {
+      try { localStorage.setItem('mavhealth.hideInstallTip', '1'); } catch {}
+      e.target.closest('.banner').remove();
+    });
     $('#editProfile', root)?.addEventListener('click', () => openProfileWizard(m.id));
     $('#editChecklist', root)?.addEventListener('click', () => openChecklistSheet(m.id));
 
