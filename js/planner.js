@@ -5,7 +5,7 @@
    - common free slots across members for meet-ups
    ============================================================ */
 
-import { dowOf, addDays, todayStr, fmtTime } from './store.js';
+import { dowOf, addDays, todayStr, fmtTime, uid } from './store.js';
 
 /* ---------- time helpers (minutes since midnight) ---------- */
 export const toMin = (t) => {
@@ -78,6 +78,69 @@ export function paceOptions(profile) {
 /** Protein goal: ~0.9 g per lb of goal bodyweight. */
 export const proteinGoal = (profile) =>
   Math.round(0.9 * (Number(profile.goalWeightLb) || Number(profile.weightLb) || 0));
+
+/* ---------- workout plan generation ---------- */
+/* Exercise menus per session template — ordered compound → accessory,
+   trimmed to fit the member's session length. */
+const MENUS = {
+  'Push':        ['Bench press', 'Overhead press', 'Incline DB press', 'Cable fly', 'Lateral raises', 'Triceps pushdown', 'Overhead triceps extension', 'Dips'],
+  'Pull':        ['Deadlift', 'Pull-ups', 'Barbell row', 'Lat pulldown', 'Face pulls', 'Biceps curls', 'Hammer curls', 'Rear delt fly'],
+  'Legs & Core': ['Squat', 'Romanian deadlift', 'Walking lunges', 'Leg press', 'Leg curls', 'Calf raises', 'Hanging leg raises', 'Plank'],
+  'Upper':       ['Bench press', 'Barbell row', 'Overhead press', 'Lat pulldown', 'Lateral raises', 'Biceps curls', 'Triceps pushdown', 'Face pulls'],
+  'Lower':       ['Squat', 'Romanian deadlift', 'Leg press', 'Walking lunges', 'Leg curls', 'Calf raises', 'Hanging leg raises', 'Plank'],
+  'Full Body':   ['Squat', 'Bench press', 'Barbell row', 'Overhead press', 'Romanian deadlift', 'Pull-ups', 'Plank', 'Biceps curls'],
+};
+
+const SPLITS = {
+  1: ['Full Body'],
+  2: ['Full Body', 'Full Body'],
+  3: ['Push', 'Pull', 'Legs & Core'],
+  4: ['Upper', 'Lower', 'Upper', 'Lower'],
+  5: ['Push', 'Pull', 'Legs & Core', 'Upper', 'Lower'],
+  6: ['Push', 'Pull', 'Legs & Core', 'Push', 'Pull', 'Legs & Core'],
+  7: ['Push', 'Pull', 'Legs & Core', 'Upper', 'Lower', 'Full Body', 'Full Body'],
+};
+
+/* sets × reps tuned to the gym goal */
+const GOAL_SCHEMES = {
+  cut:      { sets: 3, reps: '12-15', finisher: { name: 'Incline walk / bike (finisher)', sets: 1, reps: '10 min' } },
+  recomp:   { sets: 3, reps: '8-12',  finisher: null },
+  leanbulk: { sets: 4, reps: '6-10',  finisher: null },
+  bulk:     { sets: 4, reps: '5-8',   finisher: null },
+  maintain: { sets: 3, reps: '8-12',  finisher: null },
+};
+
+export const splitName = (days) =>
+  ({ 1: 'full-body', 2: 'full-body', 3: 'push / pull / legs', 4: 'upper / lower',
+     5: 'PPL + upper / lower', 6: 'push / pull / legs ×2', 7: 'everyday' }[days] || 'custom');
+
+/**
+ * Generate workout plans from profile answers: gymDays (dows), gymMinutes, gymGoal.
+ * Returned plans carry auto:true so a wizard re-run can replace them while
+ * leaving hand-made plans alone.
+ */
+export function generateWorkoutPlans(profile) {
+  const days = [...new Set(profile.gymDays || [])].sort((a, b) => a - b);
+  if (!days.length) return [];
+  const scheme = GOAL_SCHEMES[profile.gymGoal] || GOAL_SCHEMES.recomp;
+  const minutes = Number(profile.gymMinutes) || 60;
+  const exCount = minutes <= 30 ? 4 : minutes <= 45 ? 5 : minutes <= 60 ? 6 : minutes <= 90 ? 7 : 8;
+  const templates = SPLITS[Math.min(days.length, 7)];
+
+  // A/B variants when the same template repeats (e.g. Upper A / Upper B)
+  const seen = {};
+  return templates.map((tpl, i) => {
+    seen[tpl] = (seen[tpl] || 0) + 1;
+    const repeatTotal = templates.filter((x) => x === tpl).length;
+    const name = repeatTotal > 1 ? `${tpl} ${String.fromCharCode(64 + seen[tpl])}` : tpl;
+    // B-variants rotate the menu so the two days aren't identical
+    const menu = MENUS[tpl];
+    const rotated = seen[tpl] > 1 ? [...menu.slice(2), ...menu.slice(0, 2)] : menu;
+    const exercises = rotated.slice(0, exCount).map((ex) => ({ name: ex, sets: scheme.sets, reps: scheme.reps }));
+    if (scheme.finisher) exercises.push({ ...scheme.finisher });
+    return { id: uid(), name, dows: [days[i]], auto: true, exercises };
+  });
+}
 
 /* ---------- busy intervals ---------- */
 /** Member's busy intervals [{s,e,label}] for a date: profile blocks + timed events. */

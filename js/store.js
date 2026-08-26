@@ -82,42 +82,6 @@ function seed() {
 
   const defaultGoals = { calories: 2400, protein: 160, water: 8, workouts: 4 };
 
-  const mealWeek = () => {
-    const w = {};
-    for (let d = 0; d <= 6; d++) {
-      w[d] = [
-        { id: uid(), slot: 'Breakfast', name: 'Eggs, oats & fruit',        cal: 520, protein: 32 },
-        { id: uid(), slot: 'Lunch',     name: 'Chicken rice bowl',         cal: 680, protein: 48 },
-        { id: uid(), slot: 'Dinner',    name: 'Salmon, potatoes & greens', cal: 740, protein: 45 },
-        { id: uid(), slot: 'Snack',     name: 'Greek yogurt + granola',    cal: 280, protein: 20 },
-      ];
-    }
-    return w;
-  };
-
-  const push = { id: uid(), name: 'Push Day', dows: [1, 4], exercises: [
-    { name: 'Bench press',        sets: 4, reps: '8'    },
-    { name: 'Overhead press',     sets: 3, reps: '10'   },
-    { name: 'Incline DB press',   sets: 3, reps: '10'   },
-    { name: 'Lateral raises',     sets: 3, reps: '15'   },
-    { name: 'Triceps pushdown',   sets: 3, reps: '12'   },
-  ]};
-  const pull = { id: uid(), name: 'Pull Day', dows: [2, 5], exercises: [
-    { name: 'Deadlift',           sets: 3, reps: '5'    },
-    { name: 'Pull-ups',           sets: 4, reps: 'AMRAP'},
-    { name: 'Barbell row',        sets: 3, reps: '10'   },
-    { name: 'Face pulls',         sets: 3, reps: '15'   },
-    { name: 'Biceps curls',       sets: 3, reps: '12'   },
-  ]};
-  const legs = { id: uid(), name: 'Legs & Core', dows: [3, 6], exercises: [
-    { name: 'Squat',              sets: 4, reps: '8'    },
-    { name: 'Romanian deadlift',  sets: 3, reps: '10'   },
-    { name: 'Walking lunges',     sets: 3, reps: '12/leg'},
-    { name: 'Leg curls',          sets: 3, reps: '12'   },
-    { name: 'Hanging leg raises', sets: 3, reps: '12'   },
-  ]};
-  const clone = (p) => ({ ...p, id: uid(), exercises: p.exercises.map((e) => ({ ...e })) });
-
   return {
     v: 1,
     updatedAt: Date.now(),
@@ -135,10 +99,12 @@ function seed() {
       { id: uid(), title: 'Meal prep', date: next(0), start: '15:00', end: '17:00',
         type: 'meal', members: [luk, cam, die], notes: 'Cook lunches for the week', recur: 'weekly' },
     ],
-    mealPlans: { [luk]: mealWeek(), [cam]: mealWeek(), [die]: mealWeek() },
+    // blank slates — meal plans are built by hand/scanning, workout plans are
+    // generated from each member's profile wizard answers
+    mealPlans: { [luk]: {}, [cam]: {}, [die]: {} },
     mealLog: {},      // 'date|member' -> { mealId: true }
     mealExtras: {},   // 'date|member' -> [{id, slot, name, cal, protein, done, thumb?}] — photo-scanned / ad-hoc
-    workoutPlans: { [luk]: [push, pull, legs], [cam]: [clone(push), clone(pull), clone(legs)], [die]: [clone(push), clone(pull), clone(legs)] },
+    workoutPlans: { [luk]: [], [cam]: [], [die]: [] },
     workoutLog: {},   // 'date|member' -> { planId: { ex: {idx:true}, done: bool } }
     water: {},        // 'date|member' -> glasses
   };

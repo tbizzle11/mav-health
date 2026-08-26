@@ -96,7 +96,7 @@ function firstRun() {
 }
 
 /* boot */
-window.__mavBuild = 12; // bump to verify which build the page runs
+window.__mavBuild = 13; // bump to verify which build the page runs
 applyTheme();
 initStore();
 mountTabIcons();

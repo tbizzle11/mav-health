@@ -3,7 +3,7 @@
    Finishing sets the member's calorie + protein goals from the chosen pace. */
 import { getState, mutate, memberById, uid } from '../store.js';
 import { $, $$, esc, openSheet, closeSheet, toast } from '../ui.js';
-import { maintenanceCalories, paceOptions, proteinGoal, sleepHours } from '../planner.js';
+import { maintenanceCalories, paceOptions, proteinGoal, sleepHours, generateWorkoutPlans, splitName } from '../planner.js';
 
 const DOW = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 const ACTIVITIES = [
@@ -45,6 +45,7 @@ export function openProfileWizard(memberId) {
     gymMinutes: p.gymMinutes || 60,
     gymGoal: p.gymGoal || 'recomp',
     gymTime: p.gymTime || 'evening',
+    gymDays: p.gymDays ? [...p.gymDays] : [1, 2, 4, 5],
     planKey: p.plan?.pace || null,
   };
   let step = 0;
@@ -232,6 +233,13 @@ export function openProfileWizard(memberId) {
           </div>
         </div>
         <div class="field">
+          <label class="label">Which days can you train?</label>
+          <div class="picker" id="wzGymDays">
+            ${DOW.map((d, i) => `<button class="picker-opt ${draft.gymDays.includes(i) ? 'is-on' : ''}" data-gymday="${i}">${d}</button>`).join('')}
+          </div>
+          <p class="tiny dim" style="margin-top:6px">Your workout split in the Train tab is built from these answers.</p>
+        </div>
+        <div class="field">
           <label class="label">Best time to train</label>
           <div class="seg" id="wzGymTime">
             ${[['morning', 'Morning'], ['afternoon', 'Afternoon'], ['evening', 'Evening']].map(([v, l]) => `
@@ -247,11 +255,21 @@ export function openProfileWizard(memberId) {
         draft.gymGoal = b.dataset.goal;
         $$('#wzGymGoal .picker-opt', root).forEach((x) => x.classList.toggle('is-on', x === b));
       }));
+      $$('#wzGymDays .picker-opt', root).forEach((b) => b.addEventListener('click', () => {
+        const d = Number(b.dataset.gymday);
+        draft.gymDays = draft.gymDays.includes(d)
+          ? draft.gymDays.filter((x) => x !== d)
+          : [...draft.gymDays, d].sort((a, z) => a - z);
+        b.classList.toggle('is-on');
+      }));
       $$('#wzGymTime .seg-item', root).forEach((b) => b.addEventListener('click', () => {
         draft.gymTime = b.dataset.time;
         $$('#wzGymTime .seg-item', root).forEach((x) => x.classList.toggle('is-on', x === b));
       }));
-      wireNav(() => {});
+      wireNav(() => {}, () => {
+        if (!draft.gymDays.length) { toast('Pick at least one training day (or… zero? Pick one 😅)'); return false; }
+        return true;
+      });
       return;
     }
 
@@ -283,6 +301,7 @@ export function openProfileWizard(memberId) {
           </button>`).join('')}
       </div>
       <p class="small muted" style="margin:12px 2px">Picking a plan sets your daily rings: <b class="num">${options.find((o) => o.key === draft.planKey)?.calories} cal</b> · <b class="num">${pro}g protein</b> (0.9 g per lb of goal weight). Estimates, not medical advice — adjust any time in Team.</p>
+      <div class="banner" style="margin-bottom:4px">🏋️ Finishing also builds your <b>${draft.gymDays.length}-day ${esc(splitName(draft.gymDays.length))}</b> split in the Train tab — ${draft.gymMinutes}-minute sessions tuned for <b>${esc((GYM_GOALS.find((g) => g.v === draft.gymGoal) || {}).label || draft.gymGoal)}</b>. Tweak any exercise afterwards.</div>
       ${nav('Finish ✓')}`;
     $$('#wzPlans [data-plan]', root).forEach((b) => b.addEventListener('click', () => {
       draft.planKey = b.dataset.plan; render();
@@ -297,6 +316,7 @@ export function openProfileWizard(memberId) {
     weightLb: draft.weightLb, goalWeightLb: draft.goalWeightLb || draft.weightLb,
     age: draft.age, sex: draft.sex, activity: draft.activity,
     gymMinutes: draft.gymMinutes, gymGoal: draft.gymGoal, gymTime: draft.gymTime,
+    gymDays: [...draft.gymDays],
   });
 
   function wireNav(syncFn, validateFn = null, isFinish = false) {
@@ -332,9 +352,13 @@ export function openProfileWizard(memberId) {
       };
       mm.goals.calories = chosen.calories;
       mm.goals.protein = proteinGoal(prof);
+      mm.goals.workouts = prof.gymDays.length;
+      // (re)build the generated workout split; hand-made plans are kept
+      const manual = (s.workoutPlans[m.id] || []).filter((pl) => !pl.auto);
+      s.workoutPlans[m.id] = [...manual, ...generateWorkoutPlans(prof)];
     });
     closeSheet();
-    toast(`${m.name}'s plan is set — ${chosen.calories} cal/day 🎯`);
+    toast(`${m.name}'s plan is set — ${chosen.calories} cal/day + a ${prof.gymDays.length}-day split 🎯`);
   }
 
   openSheet({ title: `${m.name} — ${STEPS[0]}`, body: '', onSave: null, setup: render });

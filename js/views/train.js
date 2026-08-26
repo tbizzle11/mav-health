@@ -45,6 +45,7 @@ function renderInto(root) {
           <div class="col gap-4 grow">
             <div class="row gap-8">
               <span class="card-title">${esc(p.name)}</span>
+              ${p.auto ? `<span class="pill">from your profile</span>` : ''}
               ${isToday ? `<span class="pill" style="background:var(--accent-soft);color:var(--accent)">Today</span>` : ''}
               ${done ? `<span class="pill" style="background:var(--green-soft);color:var(--green)">Done ✓</span>` : ''}
             </div>
@@ -64,7 +65,8 @@ function renderInto(root) {
       </div>`;
     }).join('') : `
       <div class="card"><div class="empty"><span class="empty-ico">🏋️</span>
-        No workout plans yet for ${esc(memberById(member).name)}.<br>Tap + to build one.</div></div>`}
+        No workout plans yet for ${esc(memberById(member).name)}.<br>
+        Run the <b>profile wizard</b> (Today banner, or Team → member) and a split gets built from the answers — or tap + to make one by hand.</div></div>`}
   </div>`;
 
   $$('[data-member]', root).forEach((b) => b.addEventListener('click', () => {
