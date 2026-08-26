@@ -75,7 +75,12 @@ async function api(path, opts = {}) {
 }
 
 /* ---------- engine ---------- */
-let base = {};            // bucket -> JSON string as of last successful sync
+/* base = per-bucket JSON string as of the last successful sync. PERSISTED so
+   an app relaunch doesn't mistake untouched local data for fresh edits and
+   clobber newer remote data (the stale-overwrite bug). */
+const BASE_STORE = 'mavhealth.syncbase';
+let base = (() => { try { return JSON.parse(localStorage.getItem(BASE_STORE) || '{}'); } catch { return {}; } })();
+const saveBase = () => { try { localStorage.setItem(BASE_STORE, JSON.stringify(base)); } catch {} };
 let applyingRemote = false;
 let pushTimer = null;
 let pollTimer = null;
@@ -95,7 +100,7 @@ async function push() {
     team_id: team, bucket: b,
     data: JSON.parse(snap(b)),
     updated_at: new Date().toISOString(),
-    device: deviceId(),
+    device: `${deviceId()}@b${window.__mavBuild || 0}`,
   }));
   await api('', {
     method: 'POST',
@@ -103,6 +108,7 @@ async function push() {
     body: JSON.stringify(rows),
   });
   dirty.forEach((b) => { base[b] = snap(b); });
+  saveBase();
 }
 
 async function pull({ replace = false } = {}) {
@@ -120,8 +126,10 @@ async function pull({ replace = false } = {}) {
         const localStr = snap(b);
         if (remoteStr === localStr) { base[b] = remoteStr; continue; }
 
-        if (replace || localStr === base[b]) {
-          // no local edits since last sync (or joining) — adopt remote wholly
+        if (replace || localStr === base[b] || (base[b] === undefined && BUCKETS[b].mode === 'lww')) {
+          // adopt remote wholly when: joining, no local edits since last sync,
+          // or we have no baseline to prove local edits (fresh boot after
+          // upgrade) — the server is the source of truth in that case
           setVal(s, b, row.data);
           base[b] = remoteStr;
           changed++;
@@ -144,6 +152,7 @@ async function pull({ replace = false } = {}) {
       }
     });
   } finally { applyingRemote = false; }
+  saveBase();
   return { changed, rows: rows.length };
 }
 
@@ -223,6 +232,7 @@ export function leaveTeamSync() {
   setTeamKey('');
   clearInterval(pollTimer); pollTimer = null;
   base = {};
+  try { localStorage.removeItem(BASE_STORE); } catch {}
   status.error = ''; status.lastSync = 0;
   announce();
 }
