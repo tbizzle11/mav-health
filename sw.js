@@ -1,6 +1,6 @@
 /* MAV Health service worker — network-first with offline fallback.
    Fresh code whenever online; the cached shell keeps the app working offline. */
-const CACHE = 'mav-health-v10';
+const CACHE = 'mav-health-v11';
 const SHELL = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const SHELL = [
   './js/ai.js',
   './js/ics.js',
   './js/planner.js',
+  './js/sync.js',
   './js/views/scan.js',
   './js/views/profile.js',
   './js/views/settings.js',

@@ -11,6 +11,7 @@ import { teamView } from './views/team.js';
 import { openMemberSheet } from './views/team.js';
 import { openScanSheet, peekPendingScan } from './views/scan.js';
 import { openSettingsSheet, applyTheme } from './views/settings.js';
+import { initSync } from './sync.js';
 
 const VIEWS = { today: todayView, calendar: calendarView, meals: mealsView, train: trainView, team: teamView };
 
@@ -95,7 +96,7 @@ function firstRun() {
 }
 
 /* boot */
-window.__mavBuild = 11; // bump to verify which build the page runs
+window.__mavBuild = 12; // bump to verify which build the page runs
 applyTheme();
 initStore();
 mountTabIcons();
@@ -120,6 +121,7 @@ window.addEventListener('focus', () => render());
 
 render();
 firstRun();
+initSync();
 
 /* If iOS reloaded the app mid-scan (camera round-trip under memory pressure),
    pick the scan back up instead of silently losing the photo. */

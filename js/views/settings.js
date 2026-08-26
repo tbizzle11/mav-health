@@ -4,6 +4,7 @@
 import { getState, mutate, memberById, initialsOf } from '../store.js';
 import { $, $$, esc, openSheet, closeSheet, confirmSheet, toast } from '../ui.js';
 import { getApiKey, setApiKey } from '../ai.js';
+import { getTeamKey, syncStatus, createTeamSync, joinTeamSync, leaveTeamSync, syncNow } from '../sync.js';
 
 const THEME_KEY = 'mavhealth.theme';
 
@@ -42,6 +43,25 @@ export function openSettingsSheet() {
             <button class="seg-item ${getTheme() === v ? 'is-on' : ''}" data-theme-opt="${v}">${l}</button>`).join('')}
         </div>
         <p class="tiny dim" style="margin-top:6px">Auto follows your phone's light/dark setting.</p>
+      </div>
+
+      <div class="field">
+        <label class="label">Team sync</label>
+        <div id="setSyncWrap">
+          ${getTeamKey() ? `
+            <div class="row-between" style="margin-bottom:10px">
+              <span class="small strong" style="color:var(--green)" id="syncState">✓ Syncing with the team</span>
+              <button class="btn btn-sm" id="syncNowBtn">Sync now</button>
+            </div>
+            <button class="btn btn-block" id="syncCopyKey" style="margin-bottom:8px">📋 Copy team key (share with the guys)</button>
+            <button class="btn btn-danger btn-block" id="syncLeave">Turn off sync on this phone</button>` : `
+            <p class="tiny dim" style="margin-bottom:10px">Share calendars, plans and the scoreboard across all three phones. One person creates the team; the others join with the key.</p>
+            <button class="btn btn-primary btn-block" id="syncCreate" style="margin-bottom:8px">🚀 Create team sync (start from this phone's data)</button>
+            <div class="row gap-8">
+              <input class="input grow" id="syncJoinKey" placeholder="mav-… team key" autocomplete="off" />
+              <button class="btn btn-sm" id="syncJoin" style="flex:none">Join</button>
+            </div>`}
+        </div>
       </div>
 
       <div class="field">
@@ -85,6 +105,51 @@ export function openSettingsSheet() {
         setTheme(b.dataset.themeOpt);
         $$('#setTheme .seg-item', root).forEach((x) => x.classList.toggle('is-on', x === b));
       }));
+
+      /* team sync */
+      $('#syncCreate', root)?.addEventListener('click', async () => {
+        const btn = $('#syncCreate', root);
+        btn.disabled = true; btn.textContent = 'Creating…';
+        try {
+          const key = await createTeamSync();
+          try { await navigator.clipboard.writeText(key); } catch {}
+          toast('Team sync is live — key copied 📋');
+          closeSheet(); openSettingsSheet();
+        } catch (err) {
+          btn.disabled = false; btn.textContent = '🚀 Create team sync (start from this phone\'s data)';
+          toast('Couldn’t reach the sync server — try again');
+        }
+      });
+      $('#syncJoin', root)?.addEventListener('click', async () => {
+        const key = $('#syncJoinKey', root).value.trim();
+        if (!key.startsWith('mav-')) { toast('Paste the team key (starts with mav-)'); return; }
+        const btn = $('#syncJoin', root);
+        btn.disabled = true; btn.textContent = '…';
+        try {
+          await joinTeamSync(key);
+          toast('Joined! Pick who you are 👇');
+          location.reload(); // fresh boot: team data + identity picker
+        } catch (err) {
+          btn.disabled = false; btn.textContent = 'Join';
+          toast(err.message || 'Join failed');
+        }
+      });
+      $('#syncCopyKey', root)?.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(getTeamKey()); toast('Team key copied 📋'); }
+        catch { toast(`Key: ${getTeamKey()}`); }
+      });
+      $('#syncNowBtn', root)?.addEventListener('click', async () => {
+        await syncNow();
+        const s2 = syncStatus();
+        toast(s2.error ? `Sync problem: ${s2.error}` : 'Synced ✓');
+      });
+      $('#syncLeave', root)?.addEventListener('click', () => {
+        closeSheet();
+        confirmSheet('Turn off sync', 'This phone keeps its data but stops sharing with the team. Rejoin any time with the key.', () => {
+          leaveTeamSync();
+          toast('Sync off on this phone');
+        }, 'Turn off');
+      });
 
       $$('#setWho [data-iam]', root).forEach((b) => b.addEventListener('click', () => {
         mutate((st) => { st.me = b.dataset.iam; });
