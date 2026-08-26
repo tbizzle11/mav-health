@@ -4,6 +4,11 @@ Health scheduling app for the MAV team (Market Mavericks) — shared calendar,
 personal meal plans, workout plans, and daily tracking. Built as an installable
 PWA: no App Store, no build step, works offline.
 
+**Live:** https://tbizzle11.github.io/mav-health/ — on iPhone: open in Safari →
+Share → **Add to Home Screen**. Deploys via GitHub Pages from `main`
+(github.com/tbizzle11/mav-health); pushing to `main` ships in ~1 minute.
+When shipping breaking changes, bump `CACHE` in sw.js and `__mavBuild` in js/main.js.
+
 ## Run it locally
 
 ```
