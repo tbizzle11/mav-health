@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+<title>MAV Health</title>
+<meta name="description" content="Shared scheduling, meal plans and training for the MAV team." />
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0b0d14" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f6f7fb" media="(prefers-color-scheme: light)" />
+
+<!-- iOS home-screen app -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="MAV Health" />
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+<link rel="icon" href="assets/icon-192.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&display=swap" />
+<link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+
+<div id="app">
+  <!-- Top bar -->
+  <header id="topbar" class="topbar">
+    <div class="topbar-inner">
+      <button id="profileBtn" class="avatar-btn" type="button" aria-label="Switch member"></button>
+      <div class="topbar-title">
+        <h1 id="viewTitle">Today</h1>
+        <p id="viewSubtitle" class="topbar-sub"></p>
+      </div>
+      <button id="topAction" class="icon-btn" type="button" aria-label="Action" hidden></button>
+      <button id="settingsBtn" class="icon-btn" type="button" aria-label="Settings" data-ico="gear"></button>
+    </div>
+  </header>
+
+  <!-- Routed content -->
+  <main id="view" class="view" role="main"></main>
+
+  <!-- Bottom tab bar -->
+  <nav id="tabbar" class="tabbar" role="navigation" aria-label="Main">
+    <a class="tab" href="#/today"    data-tab="today">    <span class="tab-ico" data-ico="today"></span><span class="tab-label">Today</span></a>
+    <a class="tab" href="#/calendar" data-tab="calendar"> <span class="tab-ico" data-ico="calendar"></span><span class="tab-label">Calendar</span></a>
+    <a class="tab" href="#/meals"    data-tab="meals">    <span class="tab-ico" data-ico="meals"></span><span class="tab-label">Meals</span></a>
+    <a class="tab" href="#/train"    data-tab="train">    <span class="tab-ico" data-ico="train"></span><span class="tab-label">Train</span></a>
+    <a class="tab" href="#/team"     data-tab="team">     <span class="tab-ico" data-ico="team"></span><span class="tab-label">Team</span></a>
+  </nav>
+</div>
+
+<!-- Sheet / modal host -->
+<div id="sheetHost" class="sheet-host" hidden>
+  <div class="sheet-scrim" data-close="1"></div>
+  <div class="sheet" role="dialog" aria-modal="true">
+    <div class="sheet-grab"></div>
+    <div class="sheet-head">
+      <button class="sheet-cancel" type="button" data-close="1">Cancel</button>
+      <h2 id="sheetTitle" class="sheet-title"></h2>
+      <button id="sheetSave" class="sheet-save" type="button">Save</button>
+    </div>
+    <div id="sheetBody" class="sheet-body"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
