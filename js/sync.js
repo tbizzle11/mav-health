@@ -91,7 +91,7 @@ function dirtyBuckets() {
   return Object.keys(BUCKETS).filter((b) => snap(b) !== base[b]);
 }
 
-async function push() {
+async function push({ keepalive = false } = {}) {
   if (!getTeamKey()) return;
   const dirty = dirtyBuckets();
   if (!dirty.length) return;
@@ -102,11 +102,18 @@ async function push() {
     updated_at: new Date().toISOString(),
     device: `${deviceId()}@b${window.__mavBuild || 0}`,
   }));
-  await api('', {
+  const opts = {
     method: 'POST',
     headers: { Prefer: 'resolution=merge-duplicates' },
     body: JSON.stringify(rows),
-  });
+  };
+  try {
+    await api('', keepalive ? { ...opts, keepalive: true } : opts);
+  } catch (err) {
+    // keepalive caps the body at ~64KB — retry without it (photo thumbs etc.)
+    if (!keepalive) throw err;
+    await api('', opts);
+  }
   dirty.forEach((b) => { base[b] = snap(b); });
   saveBase();
 }
@@ -182,6 +189,12 @@ export function initSync() {
   subscribe(() => schedulePush());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') cycle();
+    else if (getTeamKey()) {
+      // app going to background — flush pending edits NOW so a close/kill
+      // can't strand them un-synced (they're always safe locally regardless)
+      clearTimeout(pushTimer);
+      push({ keepalive: true }).catch(() => { /* retries on next open */ });
+    }
   });
   if (getTeamKey()) {
     cycle();
@@ -207,17 +220,67 @@ export async function createTeamSync() {
   }
 }
 
-/** Join an EXISTING team: adopt the team's data (replaces shared data on this phone). */
+/** Join an EXISTING team: adopt the team's shared data, but CARRY OVER this
+    phone's personal data — logs are re-keyed to the matching team member by
+    name and merged, and locally-created events come along. Nothing logged
+    before joining is thrown away. */
 export async function joinTeamSync(key) {
   const prev = getTeamKey();
+  const localBefore = JSON.parse(JSON.stringify(getState()));
   setTeamKey(key.trim());
   base = {};
   try {
     const { rows } = await pull({ replace: true });
     if (!rows) throw new Error('No team found for that key — check it and try again.');
-    // identity re-pick: remote member ids differ from this phone's old seed
+
     applyingRemote = true;
-    try { mutate((s) => { s.me = null; }); } finally { applyingRemote = false; }
+    try {
+      mutate((s) => {
+        // map this phone's old member ids -> team member ids by name
+        const nameToNew = {};
+        s.members.forEach((m) => { nameToNew[m.name.trim().toLowerCase()] = m.id; });
+        const oldToNew = {};
+        (localBefore.members || []).forEach((m) => {
+          const nid = nameToNew[m.name.trim().toLowerCase()];
+          if (nid) oldToNew[m.id] = nid;
+        });
+        const remapKey = (k) => {
+          const i = k.lastIndexOf('|');
+          if (i < 0) return k;
+          const nid = oldToNew[k.slice(i + 1)];
+          return nid ? k.slice(0, i + 1) + nid : k;
+        };
+
+        // personal logs: remap + merge (team data wins on exact conflicts)
+        ['mealLog', 'workoutLog', 'water', 'checklistLog', 'wins', 'mealExtras'].forEach((b) => {
+          Object.entries(localBefore[b] || {}).forEach(([k, v]) => {
+            const nk = remapKey(k);
+            const cur = s[b][nk];
+            if (cur === undefined) s[b][nk] = v;
+            else if (Array.isArray(v) && Array.isArray(cur)) {
+              v.forEach((x) => { if (!cur.some((y) => y.id === x.id)) cur.push(x); });
+            } else if (v && cur && typeof v === 'object' && typeof cur === 'object') {
+              s[b][nk] = { ...v, ...cur };
+            }
+          });
+        });
+
+        // events created on this phone come along (skip dupes of team events)
+        const dupe = (ev) => s.events.some((t) =>
+          t.id === ev.id || (t.title === ev.title && t.date === ev.date && t.start === ev.start));
+        (localBefore.events || []).forEach((ev) => {
+          if (ev.feedId || dupe(ev)) return;
+          const members = ev.members.map((id) => oldToNew[id] || id)
+            .filter((id) => s.members.some((m) => m.id === id));
+          s.events.push({ ...ev, members: members.length ? members : s.members.map((m) => m.id) });
+        });
+        // (meal/workout PLANS deliberately start from the team's truth)
+
+        s.me = null; // re-pick identity against the team's member list
+      });
+    } finally { applyingRemote = false; }
+
+    await push(); // send the merged result up so the team sees it too
     status.lastSync = Date.now(); status.error = '';
     if (!pollTimer) pollTimer = setInterval(() => cycle(), 45000);
     announce();
